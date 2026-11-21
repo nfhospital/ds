@@ -177,13 +177,15 @@
     let saveTimer = null;
     let audioCtx = null;
 
-    let state = {
+   let state = {
       patternIdx: 0,
       countInStep: 0,
       currentVideoId: "",
       currentTime: 0,
       queues: {},
-      adQueue: []
+      adQueue: [],
+      knownAds: [],
+      knownLibs: {}
     };
 
     // --- 1. INITIALIZATION ---
@@ -263,7 +265,47 @@
         })
         .catch(err => console.error("API sync error:", err));
     }
+// Pudhusa add aagura Ads & Videos-a wait pannama immediate-a queue-la serkkum
+    function syncNewItemsToQueues() {
+      if (!appData) return;
 
+      // 1. Hospital Ads (Regular + Today's Special Day Ads -> Direct-a FRONT-la add aagum)
+      const activeAdIds = (appData.ads || []).map(a => a.id);
+      if (!Array.isArray(state.knownAds)) state.knownAds = [];
+      if (state.knownAds.length === 0 && state.adQueue.length > 0) {
+        state.knownAds = [...state.adQueue];
+      }
+
+      const newAds = activeAdIds.filter(id => !state.knownAds.includes(id));
+      if (newAds.length > 0) {
+        state.adQueue = state.adQueue.filter(id => activeAdIds.includes(id));
+        // Pudhu ads-a shuffle panni queue-oda 1st-la vakkiradhu (Next break-laye play aagum!)
+        shuffleArray(newAds).forEach(id => {
+          if (!state.adQueue.includes(id)) state.adQueue.unshift(id);
+        });
+      }
+      state.knownAds = [...activeAdIds];
+
+      // 2. Movies / Songs / Comedy / Programs (Running queue-la random-a mix aagum)
+      if (!state.knownLibs) state.knownLibs = {};
+      Object.keys(appData.libraries || {}).forEach(cat => {
+        const pool = appData.libraries[cat] || [];
+        const prevKnown = state.knownLibs[cat] || [];
+
+        if (prevKnown.length > 0 && Array.isArray(state.queues[cat])) {
+          const newVids = pool.filter(id => !prevKnown.includes(id));
+          newVids.forEach(id => {
+            if (!state.queues[cat].includes(id)) {
+              const randIdx = Math.floor(Math.random() * (state.queues[cat].length + 1));
+              state.queues[cat].splice(randIdx, 0, id);
+            }
+          });
+        }
+        state.knownLibs[cat] = [...pool];
+      });
+
+      saveState();
+    }
     function initPlayersIfReady() {
       if (!ytReady || !appData || mainPlayer) return;
 
