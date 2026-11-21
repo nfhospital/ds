@@ -32,23 +32,14 @@
     .badge-live { background: rgba(220, 38, 38, 0.9); color: #fff; animation: pulse 1.5s infinite; }
     .badge-ad { background: rgba(7, 140, 128, 0.9); color: #fff; }
 
-    /* Start Screen (Unlocks Clear Sound on TV Bro) */
-    #start-overlay {
-      position: fixed; inset: 0; z-index: 50;
-      background: radial-gradient(circle at center, #0a2e2b 0%, #041010 100%);
-      display: none; flex-direction: column; align-items: center; justify-content: center; text-align: center;
-      padding: 30px;
+    /* Small Unmute Pill (Shows ONLY if browser blocks sound) */
+    #unmute-pill {
+      position: fixed; bottom: 28px; right: 28px; z-index: 55;
+      display: none; background: rgba(7, 140, 128, 0.95); color: #fff;
+      border: 2px solid #5eead4; border-radius: 40px; padding: 12px 24px;
+      font-size: 1rem; font-weight: 700; cursor: pointer;
+      box-shadow: 0 6px 25px rgba(0,0,0,0.5); animation: pulse 1.8s infinite;
     }
-    .start-title { font-size: 2.6rem; font-weight: 800; color: #2dd4bf; margin-bottom: 10px; }
-    .start-sub { font-size: 1.2rem; color: #94a3b8; margin-bottom: 35px; }
-    #start-btn {
-      background: linear-gradient(135deg, #078c80, #14b8a6);
-      color: #fff; border: 3px solid #5eead4; border-radius: 50px;
-      padding: 18px 55px; font-size: 1.5rem; font-weight: 800;
-      cursor: pointer; box-shadow: 0 0 35px rgba(7, 140, 128, 0.6);
-      transition: transform 0.2s;
-    }
-    #start-btn:focus, #start-btn:hover { transform: scale(1.06); outline: none; }
 
     /* Sun TV Style Broadcast Bumper Animation */
     #bumper-overlay {
@@ -99,9 +90,9 @@
       100% { transform: scale(1); opacity: 1; }
     }
     @keyframes barGlow { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
 
-    /* Dashboard (When opened without ?tv= parameter) */
+    /* Dashboard */
     #dashboard {
       display: none; padding: 40px 20px; height: 100vh; overflow-y: auto; text-align: center;
       background: radial-gradient(circle at top, #0a2e2b 0%, #041010 100%);
@@ -132,7 +123,7 @@
   <!-- Dashboard View -->
   <div id="dashboard">
     <h1 class="dash-title">📺 Hospital Digital TV Control</h1>
-    <p class="dash-sub">Select a TV to launch its channel (or copy its link for TV Bro)</p>
+    <p class="dash-sub">Select a TV to launch its channel</p>
     <div id="tv-grid" class="tv-grid"><p>Loading TVs...</p></div>
   </div>
 
@@ -145,12 +136,8 @@
   <!-- Corner Badge -->
   <div id="status-badge"></div>
 
-  <!-- One-Click Start Screen -->
-  <div id="start-overlay">
-    <h1 class="start-title" id="start-tv-name">Hospital TV</h1>
-    <p class="start-sub">Press OK on Remote to start with Clear Sound</p>
-    <button id="start-btn" autofocus>▶ START TV</button>
-  </div>
+  <!-- Fallback Unmute Pill (Only appears if browser blocks sound) -->
+  <button id="unmute-pill">🔇 Press OK for Sound</button>
 
   <!-- Sun TV Style Bumper Animation -->
   <div id="bumper-overlay">
@@ -180,6 +167,7 @@
     let appData = null;
     let mainPlayer = null;
     let adPlayer = null;
+    let mainReady = false;
     let ytReady = false;
     let started = false;
     let isAdPlaying = false;
@@ -189,14 +177,13 @@
     let saveTimer = null;
     let audioCtx = null;
 
-    // Persistent State (Survives Power Cut & Next Morning Restart)
     let state = {
       patternIdx: 0,
       countInStep: 0,
       currentVideoId: "",
       currentTime: 0,
-      queues: {},      // Shuffled non-repeating queue per category
-      adQueue: []      // Shuffled non-repeating queue for Hospital Ads
+      queues: {},
+      adQueue: []
     };
 
     // --- 1. INITIALIZATION ---
@@ -206,7 +193,7 @@
       loadSavedState();
       loadYouTubeAPI();
       fetchConfig(true);
-      setInterval(() => fetchConfig(false), 120000); // Auto-sync sheet every 2 mins
+      setInterval(() => fetchConfig(false), 120000);
     }
 
     function loadDashboard() {
@@ -264,16 +251,11 @@
           }
 
           if (isInitial) {
-            document.getElementById("start-tv-name").textContent = `${appData.tv.location} (${appData.tv.id})`;
-            document.getElementById("start-overlay").style.display = "flex";
-            document.getElementById("start-btn").focus();
             initPlayersIfReady();
           } else if (started) {
-            // Live switch detection (AUTO <-> LIVE)
             if (appData.tv.mode !== prevMode || (appData.tv.mode === "LIVE" && appData.liveVideoId !== prevLiveId)) {
               handleModePlayback(false);
             }
-            // Ad interval updated in sheet
             if (appData.tv.adInterval !== prevAdInterval && !isAdPlaying && !isLivePlaying) {
               scheduleNextAd();
             }
@@ -286,15 +268,21 @@
       if (!ytReady || !appData || mainPlayer) return;
 
       mainPlayer = new YT.Player("main-player", {
-        playerVars: { autoplay: 0, controls: 0, rel: 0, modestbranding: 1, iv_load_policy: 3, disablekb: 1 },
+        host: "https://www.youtube-nocookie.com",
+        playerVars: { autoplay: 1, controls: 0, rel: 0, modestbranding: 1, iv_load_policy: 3, disablekb: 1 },
         events: {
+          onReady: () => {
+            mainReady = true;
+            autoStartTV();
+          },
           onStateChange: onMainStateChange,
           onError: () => { if (!isLivePlaying) setTimeout(playNextProgram, 1000); }
         }
       });
 
       adPlayer = new YT.Player("ad-player", {
-        playerVars: { autoplay: 0, controls: 0, rel: 0, modestbranding: 1, iv_load_policy: 3, disablekb: 1 },
+        host: "https://www.youtube-nocookie.com",
+        playerVars: { autoplay: 1, controls: 0, rel: 0, modestbranding: 1, iv_load_policy: 3, disablekb: 1 },
         events: {
           onStateChange: onAdStateChange,
           onError: () => { if (isAdPlaying) finishAdAndResume(); }
@@ -302,31 +290,53 @@
       });
     }
 
-    // --- 2. START BUTTON (UNLOCKS SOUND) ---
-    document.getElementById("start-btn").addEventListener("click", startTV);
-    document.addEventListener("keydown", e => {
-      if (!started && (e.key === "Enter" || e.key === " ")) startTV();
-    });
-
-    function startTV() {
-      if (started || !mainPlayer || !appData) return;
+    // --- 2. AUTOMATIC START (NO START BUTTON REQUIRED) ---
+    function autoStartTV() {
+      if (started || !mainReady || !appData) return;
       started = true;
-      document.getElementById("start-overlay").style.display = "none";
 
-      // Unlock Web Audio for pleasant bumper chime
-      try {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        audioCtx.resume();
-      } catch (e) {}
-
+      // Try unmuted auto-start first
       mainPlayer.unMute();
       mainPlayer.setVolume(100);
-      adPlayer.unMute();
-      adPlayer.setVolume(100);
-
       handleModePlayback(true);
       startStateSaver();
+
+      // Check after 2.5 seconds if browser blocked unmuted autoplay
+      setTimeout(() => {
+        if (!mainPlayer || typeof mainPlayer.getPlayerState !== "function") return;
+        const pState = mainPlayer.getPlayerState();
+        // If browser paused it (-1 unstarted or 2 paused or 5 cued), start muted & show subtle unmute pill
+        if (pState !== YT.PlayerState.PLAYING && pState !== YT.PlayerState.BUFFERING) {
+          mainPlayer.mute();
+          mainPlayer.playVideo();
+          document.getElementById("unmute-pill").style.display = "block";
+        } else if (mainPlayer.isMuted && mainPlayer.isMuted()) {
+          document.getElementById("unmute-pill").style.display = "block";
+        }
+      }, 2500);
     }
+
+    function unlockAudio() {
+      document.getElementById("unmute-pill").style.display = "none";
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        audioCtx.resume();
+      } catch (e) {}
+      if (mainPlayer && mainPlayer.unMute) {
+        mainPlayer.unMute();
+        mainPlayer.setVolume(100);
+      }
+      if (adPlayer && adPlayer.unMute) {
+        adPlayer.unMute();
+        adPlayer.setVolume(100);
+      }
+    }
+
+    document.getElementById("unmute-pill").addEventListener("click", unlockAudio);
+    document.addEventListener("click", unlockAudio);
+    document.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") unlockAudio();
+    });
 
     // --- 3. MODE & SMART ROTATION ENGINE ---
     function handleModePlayback(tryResume) {
@@ -343,7 +353,6 @@
         isLivePlaying = false;
         hideBadge();
 
-        // Resume exact movie & second if available (Power Cut / Next Day)
         if (tryResume && state.currentVideoId && isVideoStillInLibrary(state.currentVideoId)) {
           mainPlayer.loadVideoById({ videoId: state.currentVideoId, startSeconds: Math.floor(state.currentTime || 0) });
         } else {
@@ -357,7 +366,6 @@
       if (!appData || !appData.pattern.length) return;
       const pattern = appData.pattern;
 
-      // Try up to pattern length to find a category with videos
       for (let attempt = 0; attempt < pattern.length; attempt++) {
         if (state.patternIdx >= pattern.length) {
           state.patternIdx = 0;
@@ -387,10 +395,7 @@
       const pool = (appData.libraries && appData.libraries[category]) ? appData.libraries[category] : [];
       if (pool.length === 0) return null;
 
-      // Remove any deleted videos from saved queue
       let q = (state.queues[category] || []).filter(id => pool.includes(id));
-
-      // Refill and shuffle when queue finishes (No repeats until full round done!)
       if (q.length === 0) {
         q = shuffleArray([...pool]);
         if (q.length > 1 && q[0] === state.currentVideoId) {
@@ -448,12 +453,15 @@
         mainPlayer.pauseVideo();
       }
 
-      // Play Intro Bumper -> Then Hospital Ad
       playBumper("HEALTH UPDATE", "SHORT BREAK", () => {
         document.getElementById("ad-layer").style.display = "block";
         showBadge("HOSPITAL INFO", "badge-ad");
-        adPlayer.unMute();
-        adPlayer.setVolume(100);
+        if (adPlayer && adPlayer.unMute && (!mainPlayer.isMuted || !mainPlayer.isMuted())) {
+          adPlayer.unMute();
+          adPlayer.setVolume(100);
+        } else if (adPlayer && adPlayer.mute) {
+          adPlayer.mute();
+        }
         adPlayer.loadVideoById(adId);
       });
     }
@@ -469,7 +477,6 @@
       hideBadge();
       if (adPlayer && adPlayer.stopVideo) adPlayer.stopVideo();
 
-      // Play Outro Bumper -> Then Exact Second Resume
       playBumper("WELCOME BACK", "NOW PLAYING", () => {
         document.getElementById("ad-layer").style.display = "none";
         isAdPlaying = false;
@@ -486,7 +493,6 @@
       document.getElementById("bumper-kicker").textContent = kicker;
       document.getElementById("bumper-text").textContent = title;
 
-      // Restart CSS animations cleanly
       overlay.style.display = "none";
       void overlay.offsetWidth;
       overlay.style.display = "flex";
@@ -498,10 +504,9 @@
       }, 2400);
     }
 
-    // Pleasant Broadcast Chime (No external MP3 needed)
     function playBroadcastChime() {
-      if (!audioCtx) return;
-      const notes = [523.25, 659.25, 783.99, 1046.50]; // C5 - E5 - G5 - C6
+      if (!audioCtx || audioCtx.state !== "running") return;
+      const notes = [523.25, 659.25, 783.99, 1046.50];
       const now = audioCtx.currentTime;
       notes.forEach((freq, i) => {
         const osc = audioCtx.createOscillator();
